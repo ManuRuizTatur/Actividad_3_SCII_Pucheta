@@ -1,1 +1,152 @@
+clc;clear;close all;
+
+%Parametros del Motor
+Laa = 366e-6;
+J = 5e-9;
+Ra = 55.6;
+B = 0;
+Ki = 7.49e-3;
+Km = 7.53e-3;
+
+%Tiempos
+Ts = 0.001;
+h = 1e-5;
+tF = 1.8; 
+pasos = (tF/h);
+
+t = 0:h:tF;
+ia = 0:h:tF;
+omega = 0:h:tF;
+w_p = 0:h:tF;
+tita = 0:h:tF;
+
+u = linspace(0,0,pasos+1);
+ref = linspace(0,0,pasos+1);
+
+%Definicion variables
+%tRef = (pi/2);          %Caso 1
+tRef = (-pi/2);     %Caso 2
+%TlRef = 1.5e-3;       %Caso 1 pedido
+%TlRef = 1.5e-6;        %Caso 1 funciona
+TlRef = 0;        %Caso 2 funciona
+tc = 500e-3;
+
+est = 0;
+ii = 1;
+kk = 0;
+
+%Condiciones Iniciales
+ia(1) = 0;
+omega(1) = 0;
+tita(1) = 0;
+wp(1) = 0;
+u(1) = 0;
+TL = TlRef;
+wp(1) = 0;
+u(1) = 0;
+
+x = [0,0,0];      %[ia, tita, omega] condiciones inicales
+x_p = [0,0,0];    %[ia_p, tita_p, omega_p]
+x_hat = [0;0;0];
+
+%Matrices:
+Mat_Ac = [-Ra/Laa -Km/Laa  0 ;
+            Ki/J   -B/J     0 ;
+            0       1       0];
+
+Mat_Bc = [1/Laa;  0;  0];
+
+Mat_C =  [0   0   1;
+          1   0   0]; % La salida es el angulo theta y la posicion.
+
+sys_c = ss(Mat_Ac,Mat_Bc,Mat_C,[0]);
+sys_d = c2d(sys_c,Ts,'zoh');
+
+Mat_A = sys_d.a;
+Mat_B = sys_d.b;
+
+%MATRIZ CONTROLABILIDAD:
+Mat_M = [Mat_B Mat_A*Mat_B Mat_A^2*Mat_B];
+
+%---------------------LQR SIN OBSERVADOR----------------------
+Q = [1  0  0;        %Corriente:
+     0  1  0;        %angulo
+     0  0  80000];   %Velocidad angular
+
+R = 1900; %Escalar ahorro de energía actua sobre la entrada u(t)
+
+K = dlqr(Mat_A, Mat_B, Q, R);
+
+%-------------------OBSERVADOR-------------------------
+Mat_Ao = Mat_A';
+Mat_Bo = Mat_C';
+Mat_Co = Mat_B';
+
+%----------------LQR CON OBSERVADOR---------------------
+Qo = [1   0       0;        %Corriente
+      0  100      0;        %Angulo
+      0    0    2100];      %Velocidad angular
+
+Ro = [100000    0   ;
+        0    100000];
+
+Ko = (dlqr(Mat_Ao,Mat_Bo,Qo,Ro))';
+
+%GANANCIA DE PREALIMENTACION
+Gj = inv(Mat_C(1,:)*inv(eye(3)-Mat_A+Mat_B*K)*Mat_B);
+while(ii<(pasos+1))
+    kk = kk+h;
+    if(kk>tc)
+        tRef = tRef*(-1);
+        if(est==0)
+            TL = 0;
+            est = 1;
+        else
+            TL = TlRef;
+            est = 0;
+        end
+        kk = 0;
+    end
+    ref(ii) = tRef;
+    estado = [ia(ii); omega(ii); tita(ii)];
+    
+    %Ley de control
+    %u(ii) = -K*estado+Gj*ref(ii); %Sin observador
+    u(ii) = -K*x_hat+Gj*ref(ii); %Con observador
+    
+    zona_m = 3;
+    
+    %--------------ZONA MUERTA-----------------
+    if(abs(u(ii))<zona_m)
+        u(ii) = 0;
+    else
+        u(ii) = sign(u(ii))*(abs(u(ii))-zona_m);
+    end
+    %-------------------------------------------
+    
+    y_sal = Mat_C*estado;
+    y_sal_o = Mat_C*x_hat;
+    
+    %Integracion de euler
+    ia_p = -(Ra/Laa)*ia(ii) - (Km/Laa)*omega(ii) + (1/Laa)*u(ii);
+    w_p = (Ki/J)*ia(ii) -(B/J)*omega(ii) + (1/J)*TL;
+    tita_p = omega(ii);
+    x_hat = Mat_A*x_hat+Mat_B*u(ii)+Ko*(y_sal - y_sal_o);
+    ia(ii+1) = ia(ii)+h*ia_p;
+    omega(ii+1) = omega(ii)+h*w_p;
+    tita(ii+1) = tita(ii)+h*omega(ii);
+    ii=ii+1;
+end
+
+
+%Graficos
+color1 = 'red';
+color2 = 'blue';
+color3 = 'black';
+
+figure(1);hold on;
+subplot(2,2,1);plot(t,ia,color1);grid on; title('i_a , Corriente [A]');hold on; xlabel('Tiempo en Seg.');hold on;
+subplot(2,2,2);plot(t,tita,color1);grid on;hold on;
+subplot(2,2,2);plot(t,ref,color3);grid on;title('\theta_t , Posicion angular [rad]');hold on; xlabel('Tiempo en Seg.');hold on;
+subplot(2,1,2);plot(t,u,color2);grid on;title('u_t , Acción de control [V]');xlabel('Tiempo en Seg.');hold on;
 
